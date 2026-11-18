@@ -132,6 +132,14 @@ const __$G=typeof globalThis!=="undefined"?globalThis:typeof window!=="undefined
   .ar .overlay { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.65); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; }
   .ar .modal { position: relative; background: #10161f; border: 1px solid #3a4a61; border-radius: 16px; max-width: 520px; width: 100%; max-height: 85vh; overflow-y: auto; padding: 24px; }
   .ar .xbtn { position: absolute; top: 10px; right: 12px; background: transparent; color: #8b98ab; font-size: 22px; padding: 4px 8px; }
+  .ar .wrow { display: flex; align-items: center; gap: 12px; width: 100%; background: #0c121b; border: 1px solid #232d3d; border-radius: 12px; padding: 12px 14px; margin-top: 10px; color: #e8eef6; font-weight: 600; font-size: 14px; text-align: left; cursor: pointer; }
+  .ar .wrow:hover { border-color: #f0b90b; }
+  .ar .wrow img { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; }
+  .ar .wrow .wsub { display: block; font-size: 12px; color: #8b98ab; font-weight: 400; margin-top: 2px; }
+  .ar .wrow .wtag { margin-left: auto; font-size: 11px; color: #7ee2a8; border: 1px solid #2e7d4f; border-radius: 6px; padding: 2px 8px; flex-shrink: 0; }
+  .ar .qrbox { display: flex; justify-content: center; padding: 16px 0 8px; }
+  .ar .qrbox img { border-radius: 12px; background: #fff; padding: 8px; }
+  .ar .wcaddr { word-break: break-all; font-size: 12px; color: #8b98ab; background: #0c121b; border: 1px solid #232d3d; border-radius: 8px; padding: 10px; max-height: 64px; overflow-y: auto; }
   .ar .kv { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid #232d3d; font-size: 13px; align-items: center; }
   .ar .kv span:first-child { color: #8b98ab; flex-shrink: 0; }
   .ar .copybtn { padding: 4px 10px; font-size: 12px; margin-left: 8px; }
@@ -378,10 +386,40 @@ const __$G=typeof globalThis!=="undefined"?globalThis:typeof window!=="undefined
       <div id="modalBody"></div>
     </div>
   </div>
+
+  <div id="chooserOverlay" class="overlay" style="display:none">
+    <div class="modal" role="dialog" aria-modal="true">
+      <button id="chooserClose" class="xbtn" aria-label="Close">&times;</button>
+      <h2 style="margin:0 0 4px;font-size:20px">Connect a wallet</h2>
+      <p class="meta" style="margin:0">Choose how to connect. Only wallets holding an Agent ID can submit and signal.</p>
+      <div id="chooserList"></div>
+      <p class="meta" style="margin-top:14px">New to Agent ID? See the <a href="#guide">guide</a> below.</p>
+    </div>
+  </div>
+
+  <div id="wcOverlay" class="overlay" style="display:none">
+    <div class="modal" role="dialog" aria-modal="true">
+      <button id="wcClose" class="xbtn" aria-label="Close">&times;</button>
+      <h2 style="margin:0 0 4px;font-size:20px">Scan with your mobile wallet</h2>
+      <p class="meta" style="margin:0">Open your wallet app (Binance, Trust Wallet, MetaMask…) and scan the code.</p>
+      <div id="wcQr" class="qrbox"></div>
+      <div id="wcUri" class="wcaddr" style="display:none"></div>
+      <p id="wcStatus" class="meta" style="text-align:center"></p>
+      <div class="row" style="justify-content:center;margin-top:12px">
+        <button id="wcCopy" class="ghostbtn" style="display:none">Copy connection link</button>
+        <button id="wcCancel" class="ghostbtn">Cancel</button>
+      </div>
+    </div>
+  </div>
 </div>
+<script>window.process = window.process || { env: {} };</script>
+<script src="wc-provider.js"></script>
+<script src="qr.js"></script>
 <script>
 const AGENT_ID_ADDRESS = "0x60b9262456de011f7d15a54cdd8c48baaa8b022f";
 const REGISTRY_ADDRESS = "0x7f99d9157E32E525F3A93c3b7CB3C09aaC8c525a"; // Deployed 19 Nov 2026 (BSC mainnet, block 134365690)
+const WALLETCONNECT_PROJECT_ID = ""; // Reown Cloud project ID — empty until configured
+const WC_METADATA = { name: "Agent Registry", description: "Holder-curated Agent ID project directory.", url: "https://riu-ui.github.io/agent-registry/", icons: ["https://riu-ui.github.io/agent-registry/"] };
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ABI = [
   "function submitProject(string name, address projectContract, string category, string description, string website, string xHandle) returns (uint256)",
@@ -482,6 +520,159 @@ function pickProvider() {
   return eth || window.okxwallet || null;
 }
 
+// ---- Wallet discovery (EIP-6963) + chooser + WalletConnect ----
+let currentProvider = null;
+let connectedViaWC = false;
+let wcProvider = null;
+let wcConnecting = false;
+let wcCancelled = false;
+let wcUri = "";
+let wcUriTimer = null;
+const discoveredWallets = new Map();
+window.addEventListener("eip6963:announceProvider", (e) => {
+  const d = e.detail || {};
+  if (d.info && d.info.uuid && d.provider) discoveredWallets.set(d.info.uuid, { info: d.info, provider: d.provider });
+});
+function requestWalletAnnouncements() {
+  try { window.dispatchEvent(new Event("eip6963:requestProvider")); } catch (e) {}
+}
+requestWalletAnnouncements();
+
+function wcAvailable() {
+  const g = window["@walletconnect/ethereum-provider"];
+  return !!(g && typeof g.EthereumProvider === "function");
+}
+
+function openChooser() {
+  if (typeof ethers === "undefined") {
+    walletMsg("Web3 library failed to load. Refresh the page or try another browser.");
+    return;
+  }
+  requestWalletAnnouncements();
+  renderChooser();
+  $("chooserOverlay").style.display = "flex";
+  setTimeout(() => { if ($("chooserOverlay").style.display !== "none") renderChooser(); }, 400);
+}
+function closeChooser() { $("chooserOverlay").style.display = "none"; }
+
+function renderChooser() {
+  const list = $("chooserList");
+  list.innerHTML = "";
+  const seen = new Set();
+  discoveredWallets.forEach(({ info, provider }) => {
+    seen.add(provider);
+    const icon = info.icon ? String(info.icon).replace(/"/g, "") : "";
+    const b = document.createElement("button");
+    b.className = "wrow";
+    b.innerHTML = `${icon ? `<img src="${icon}" alt="">` : ""}<span>${escapeHtml(info.name)}<span class="wsub">Browser extension</span></span><span class="wtag">Detected</span>`;
+    b.onclick = () => { closeChooser(); connectWithProvider(provider); };
+    list.appendChild(b);
+  });
+  const legacy = pickProvider();
+  if (legacy && !seen.has(legacy)) {
+    const b = document.createElement("button");
+    b.className = "wrow";
+    b.innerHTML = `<span>Browser wallet<span class="wsub">Use your default injected wallet</span></span>`;
+    b.onclick = () => { closeChooser(); connectWithProvider(legacy); };
+    list.appendChild(b);
+  }
+  if (wcAvailable()) {
+    const b = document.createElement("button");
+    b.className = "wrow";
+    b.innerHTML = `<span>WalletConnect<span class="wsub">Scan a QR code with your mobile wallet</span></span><span class="wtag">QR</span>`;
+    b.onclick = () => { closeChooser(); connectWalletConnect(); };
+    list.appendChild(b);
+  }
+  if (!list.children.length) {
+    list.innerHTML = `<p class="meta" style="margin-top:14px">No wallet detected. Install a wallet extension (OKX, MetaMask, Binance Wallet…) and refresh, or use WalletConnect from a mobile wallet.</p>`;
+  }
+}
+
+function renderWcQr(uri) {
+  wcUri = uri;
+  if (wcUriTimer) { clearTimeout(wcUriTimer); wcUriTimer = null; }
+  $("wcStatus").textContent = "Waiting for your wallet to approve…";
+  if (typeof qrcode === "function") {
+    try {
+      const qr = qrcode(0, "M");
+      qr.addData(uri);
+      qr.make();
+      $("wcQr").innerHTML = qr.createImgTag(5, 6);
+    } catch (e) { $("wcQr").innerHTML = ""; }
+  }
+  $("wcUri").textContent = uri;
+  $("wcUri").style.display = "block";
+  $("wcCopy").style.display = "inline-block";
+}
+function closeWc() { $("wcOverlay").style.display = "none"; }
+function cancelWc() {
+  wcCancelled = true;
+  if (wcUriTimer) { clearTimeout(wcUriTimer); wcUriTimer = null; }
+  closeWc();
+  if (wcProvider && wcConnecting) { try { wcProvider.disconnect(); } catch (e) {} }
+  walletMsg("");
+}
+async function copyWcUri() {
+  try {
+    await navigator.clipboard.writeText(wcUri);
+    $("wcCopy").textContent = "Copied!";
+    setTimeout(() => { $("wcCopy").textContent = "Copy connection link"; }, 2000);
+  } catch (e) {
+    $("wcStatus").textContent = "Copy failed — select the link above to copy it manually.";
+  }
+}
+
+async function connectWalletConnect() {
+  walletMsg("");
+  if (!WALLETCONNECT_PROJECT_ID) {
+    walletMsg("WalletConnect is not configured yet — a Reown Project ID is needed. Use a browser wallet for now.");
+    return;
+  }
+  if (!wcAvailable()) {
+    walletMsg("WalletConnect library failed to load. Refresh the page or use a browser wallet.");
+    return;
+  }
+  wcCancelled = false;
+  $("wcQr").innerHTML = "";
+  $("wcUri").style.display = "none";
+  $("wcCopy").style.display = "none";
+  $("wcStatus").textContent = "Creating a connection request…";
+  $("wcOverlay").style.display = "flex";
+  if (wcUriTimer) clearTimeout(wcUriTimer);
+  wcUriTimer = setTimeout(() => {
+    if (!wcCancelled && $("wcOverlay").style.display !== "none" && !$("wcQr").innerHTML) {
+      $("wcStatus").textContent = "Could not reach the WalletConnect relay. Check your connection and try again.";
+    }
+  }, 20000);
+  try {
+    if (!wcProvider) {
+      const EP = window["@walletconnect/ethereum-provider"].EthereumProvider;
+      wcProvider = await EP.init({
+        projectId: WALLETCONNECT_PROJECT_ID,
+        chains: [56],
+        showQrModal: false,
+        metadata: WC_METADATA
+      });
+      wcProvider.on("display_uri", (uri) => { if (!wcCancelled) renderWcQr(uri); });
+      wcProvider.on("disconnect", () => { if (connectedViaWC) disconnect(true); });
+    }
+    wcConnecting = true;
+    await wcProvider.connect();
+    wcConnecting = false;
+    if (wcUriTimer) { clearTimeout(wcUriTimer); wcUriTimer = null; }
+    if (wcCancelled) return;
+    closeWc();
+    connectedViaWC = true;
+    await connectWithProvider(wcProvider);
+  } catch (e) {
+    wcConnecting = false;
+    if (wcUriTimer) { clearTimeout(wcUriTimer); wcUriTimer = null; }
+    console.error(e);
+    if (wcCancelled) return;
+    $("wcStatus").textContent = "Could not start WalletConnect. Check your connection and try again.";
+  }
+}
+
 let walletMsgTimer = null;
 function walletMsg(text) {
   const el = $("walletStatus");
@@ -510,35 +701,44 @@ function attachWalletListeners(injected) {
       $("holderStatus").style.display = "none";
       $("submitBtn").disabled = true;
       initReadOnly();
-    } else if (!userDisconnected) {
-      connect();
+    } else if (!userDisconnected && currentProvider) {
+      connectWithProvider(currentProvider);
     }
   });
   injected.on("chainChanged", () => location.reload());
 }
 
-function disconnect() {
+function disconnect(silent) {
+  const wasWC = connectedViaWC;
+  connectedViaWC = false;
   account = null; signer = null; isHolder = false;
   userDisconnected = true;
   setConnectedUI(false);
   $("holderStatus").style.display = "none";
   $("submitBtn").disabled = true;
-  walletMsg("Disconnected. To fully revoke access, disconnect this site in your wallet extension.");
-  walletMsgTimer = setTimeout(() => walletMsg(""), 6000);
+  if (!silent) {
+    walletMsg("Disconnected. To fully revoke access, disconnect this site in your wallet extension.");
+    walletMsgTimer = setTimeout(() => walletMsg(""), 6000);
+  }
+  if (wasWC && wcProvider) { try { wcProvider.disconnect(); } catch (e) {} }
   initReadOnly();
 }
 
 async function connect() {
+  openChooser();
+}
+
+async function connectWithProvider(injected) {
   walletMsg("");
   if (typeof ethers === "undefined") {
     walletMsg("Web3 library failed to load. Refresh the page or try another browser.");
     return;
   }
-  const injected = pickProvider();
   if (!injected) {
-    walletMsg("No wallet found. Open this page in a browser with a wallet extension (e.g. OKX Wallet).");
+    walletMsg("No wallet found. Install a wallet extension or use WalletConnect.");
     return;
   }
+  currentProvider = injected;
   try {
     walletMsg("Waiting for wallet approval — check your wallet popup…");
     provider = new ethers.BrowserProvider(injected);
@@ -1267,6 +1467,17 @@ $("minSigSel").onchange = e => { filterMinSignals = Number(e.target.value); visi
 $("resetFilters").onclick = resetAllFilters;
 
 $("connectBtn").onclick = () => { if (account) disconnect(); else connect(); };
+$("chooserClose").onclick = closeChooser;
+$("chooserOverlay").addEventListener("click", e => { if (e.target === $("chooserOverlay")) closeChooser(); });
+$("wcClose").onclick = cancelWc;
+$("wcCancel").onclick = cancelWc;
+$("wcCopy").onclick = copyWcUri;
+$("wcOverlay").addEventListener("click", e => { if (e.target === $("wcOverlay")) cancelWc(); });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  closeChooser();
+  if ($("wcOverlay").style.display !== "none") cancelWc();
+});
 $("submitBtn").onclick = submit;
 if (contractReady()) {
   initReadOnly();
