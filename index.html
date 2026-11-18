@@ -482,18 +482,22 @@ function pickProvider() {
   return eth || window.okxwallet || null;
 }
 
+let walletMsgTimer = null;
 function walletMsg(text) {
   const el = $("walletStatus");
   if (!el) return;
+  if (walletMsgTimer) { clearTimeout(walletMsgTimer); walletMsgTimer = null; }
   el.textContent = text;
   el.style.display = text ? "block" : "none";
 }
 
 let walletListenersAttached = false;
+let userDisconnected = false;
 function setConnectedUI(on) {
   const btn = $("connectBtn");
   btn.textContent = on ? "Connected" : "Connect Wallet";
   btn.classList.toggle("connected", on);
+  btn.title = on ? "Click to disconnect" : "";
   if (!on) $("account").textContent = "";
 }
 function attachWalletListeners(injected) {
@@ -506,11 +510,22 @@ function attachWalletListeners(injected) {
       $("holderStatus").style.display = "none";
       $("submitBtn").disabled = true;
       initReadOnly();
-    } else {
+    } else if (!userDisconnected) {
       connect();
     }
   });
   injected.on("chainChanged", () => location.reload());
+}
+
+function disconnect() {
+  account = null; signer = null; isHolder = false;
+  userDisconnected = true;
+  setConnectedUI(false);
+  $("holderStatus").style.display = "none";
+  $("submitBtn").disabled = true;
+  walletMsg("Disconnected. To fully revoke access, disconnect this site in your wallet extension.");
+  walletMsgTimer = setTimeout(() => walletMsg(""), 6000);
+  initReadOnly();
 }
 
 async function connect() {
@@ -545,6 +560,7 @@ async function connect() {
     account = await signer.getAddress();
     $("account").textContent = truncAddr(account);
     walletMsg("");
+    userDisconnected = false;
     setConnectedUI(true);
     attachWalletListeners(injected);
   agentId = new ethers.Contract(AGENT_ID_ADDRESS, AGENT_ID_ABI, provider);
@@ -1250,7 +1266,7 @@ $("timeSel").onchange = e => { filterTime = e.target.value; visibleCount = PAGE_
 $("minSigSel").onchange = e => { filterMinSignals = Number(e.target.value); visibleCount = PAGE_SIZE; renderList(); };
 $("resetFilters").onclick = resetAllFilters;
 
-$("connectBtn").onclick = connect;
+$("connectBtn").onclick = () => { if (account) disconnect(); else connect(); };
 $("submitBtn").onclick = submit;
 if (contractReady()) {
   initReadOnly();
