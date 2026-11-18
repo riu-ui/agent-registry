@@ -71,6 +71,7 @@ const __$G=typeof globalThis!=="undefined"?globalThis:typeof window!=="undefined
   .ar .card.clickable:hover { border-color: #3a4a61; transform: translateY(-1px); }
   .ar button { background: #f0b90b; color: #111; border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer; font-size: 14px; }
   .ar button:disabled { opacity: .45; cursor: not-allowed; }
+  .ar #connectBtn.connected { background: #173b2a; color: #7ee2a8; border: 1px solid #2e7d4f; }
   .ar .ghostbtn { background: transparent; color: #e8eef6; border: 1px solid #30363d; }
   .ar input, .ar select, .ar textarea { width: 100%; background: #0c1119; color: #e8eef6; border: 1px solid #232d3d; border-radius: 8px; padding: 10px; margin: 6px 0 12px; font-size: 14px; font-family: inherit; }
   .ar textarea { resize: vertical; min-height: 64px; }
@@ -488,6 +489,30 @@ function walletMsg(text) {
   el.style.display = text ? "block" : "none";
 }
 
+let walletListenersAttached = false;
+function setConnectedUI(on) {
+  const btn = $("connectBtn");
+  btn.textContent = on ? "Connected" : "Connect Wallet";
+  btn.classList.toggle("connected", on);
+  if (!on) $("account").textContent = "";
+}
+function attachWalletListeners(injected) {
+  if (walletListenersAttached || !injected || typeof injected.on !== "function") return;
+  walletListenersAttached = true;
+  injected.on("accountsChanged", (accs) => {
+    if (!accs || !accs.length) {
+      account = null; signer = null; isHolder = false;
+      setConnectedUI(false);
+      $("holderStatus").style.display = "none";
+      $("submitBtn").disabled = true;
+      initReadOnly();
+    } else {
+      connect();
+    }
+  });
+  injected.on("chainChanged", () => location.reload());
+}
+
 async function connect() {
   walletMsg("");
   if (typeof ethers === "undefined") {
@@ -520,6 +545,8 @@ async function connect() {
     account = await signer.getAddress();
     $("account").textContent = truncAddr(account);
     walletMsg("");
+    setConnectedUI(true);
+    attachWalletListeners(injected);
   agentId = new ethers.Contract(AGENT_ID_ADDRESS, AGENT_ID_ABI, provider);
   isHolder = (await agentId.balanceOf(account)) > 0n;
   const st = $("holderStatus");
@@ -760,8 +787,16 @@ function renderList() {
   else if (sortMode === "ratio") items.sort((a, b) => (ratioOf(b) - ratioOf(a)) || ((b.upvotes + b.flags) - (a.upvotes + a.flags)) || b.id - a.id);
   $("dirCount").textContent = items.length + (items.length === 1 ? " project" : " projects");
   if (items.length === 0) {
-    box.innerHTML = `<div class="card empty"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#8b98ab" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><h3>No projects found</h3><p>Nothing matches your current search and filters.</p><button id="clearFilters">Clear search &amp; filters</button></div>`;
-    $("clearFilters").onclick = clearFilters;
+    let heading = "No projects yet";
+    let sub = "Be the first to submit a project to the directory.";
+    if (searchQ) { heading = `No matches for "${searchQ}"`; sub = "Try a different search or clear the filters."; }
+    else if (filterCat !== "All") { heading = `No ${filterCat} projects yet`; sub = "Nothing in this category yet — be the first to submit one."; }
+    else if (filtersActive()) { heading = "No projects match these filters"; sub = "Try widening the filters or clearing them."; }
+    const action = filtersActive()
+      ? `<button id="clearFilters">Clear search &amp; filters</button>`
+      : `<a class="btn" href="#submit">Submit the first project</a>`;
+    box.innerHTML = `<div class="card empty"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#8b98ab" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><h3>${escapeHtml(heading)}</h3><p>${escapeHtml(sub)}</p>${action}</div>`;
+    if (filtersActive()) $("clearFilters").onclick = clearFilters;
     return;
   }
   const filtersClear = filterCat === "All" && !searchQ && filterStatus === "all" && !filterReason && filterTime === "all" && filterMinSignals === 0;
