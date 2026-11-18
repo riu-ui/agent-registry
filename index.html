@@ -13,6 +13,7 @@
 <meta name="twitter:description" content="One Agent ID, one signal. Holders upvote what's real and flag what's farm.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M16 2 30 16 16 30 2 16Z' fill='%23f0b90b'/><path d='M16 9 23 16 16 23 9 16Z' fill='%23070b12'/><circle cx='16' cy='16' r='2.5' fill='%23f0b90b'/></svg>">
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.0/dist/ethers.min.js"></script>
+<script>if (typeof ethers === "undefined") document.write('<script src="https:\/\/unpkg.com\/ethers@6.13.0\/dist\/ethers.min.js"><\/script>');</script>
 <style>
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -175,6 +176,8 @@
       <button id="connectBtn">Connect Wallet</button>
     </div>
   </div>
+
+  <div id="walletStatus" class="status warn" style="display:none"></div>
 
   <div class="hero">
     <div>
@@ -446,6 +449,13 @@ function avatarHtml(address, name, size) {
 }
 
 async function initReadOnly() {
+  if (typeof ethers === "undefined") {
+    $("projects").innerHTML = '<div class="card">Web3 library failed to load (CDN blocked). Try disabling your ad-blocker or opening this page in another browser.</div>';
+    $("activity").innerHTML = '<div class="meta">Activity could not be loaded.</div>';
+    $("leaderboard").innerHTML = '<div class="meta">Leaderboard could not be loaded.</div>';
+    $("chart").innerHTML = '<div class="meta">Chart could not be loaded.</div>';
+    return;
+  }
   for (const url of RPCS) {
     try {
       const p = new ethers.JsonRpcProvider(url);
@@ -462,19 +472,53 @@ async function initReadOnly() {
   $("chart").innerHTML = '<div class="meta">Chart could not be loaded.</div>';
 }
 
-async function connect() {
-  if (!window.ethereum) { alert("No wallet found. Open this page in a wallet browser."); return; }
-  provider = new ethers.BrowserProvider(window.ethereum);
-  const net = await provider.getNetwork();
-  if (net.chainId !== 56n) {
-    try {
-      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
-      provider = new ethers.BrowserProvider(window.ethereum);
-    } catch (e) { alert("Please switch to BNB Smart Chain (chain 56)."); return; }
+function pickProvider() {
+  const eth = window.ethereum;
+  if (eth && Array.isArray(eth.providers)) {
+    return eth.providers.find(p => p.isOkxWallet) || eth.providers.find(p => p.isMetaMask) || eth.providers[0];
   }
-  signer = await provider.getSigner();
-  account = await signer.getAddress();
-  $("account").textContent = truncAddr(account);
+  return eth || window.okxwallet || null;
+}
+
+function walletMsg(text) {
+  const el = $("walletStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.style.display = text ? "block" : "none";
+}
+
+async function connect() {
+  walletMsg("");
+  if (typeof ethers === "undefined") {
+    walletMsg("Web3 library failed to load — the CDN is blocked. Disable your ad-blocker or try another browser, then refresh.");
+    return;
+  }
+  const injected = pickProvider();
+  if (!injected) {
+    walletMsg("No wallet found. Open this page in a browser with a wallet extension (e.g. OKX Wallet).");
+    return;
+  }
+  try {
+    walletMsg("Waiting for wallet approval — check your wallet popup…");
+    provider = new ethers.BrowserProvider(injected);
+    await Promise.race([
+      injected.request({ method: "eth_requestAccounts" }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))
+    ]);
+    const net = await provider.getNetwork();
+    if (net.chainId !== 56n) {
+      try {
+        await injected.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+        provider = new ethers.BrowserProvider(injected);
+      } catch (e) {
+        walletMsg("Please switch to BNB Smart Chain (chain 56) in your wallet.");
+        return;
+      }
+    }
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+    $("account").textContent = truncAddr(account);
+    walletMsg("");
   agentId = new ethers.Contract(AGENT_ID_ADDRESS, AGENT_ID_ABI, provider);
   isHolder = (await agentId.balanceOf(account)) > 0n;
   const st = $("holderStatus");
@@ -487,6 +531,12 @@ async function connect() {
   if (contractReady()) {
     registry = new ethers.Contract(REGISTRY_ADDRESS, ABI, signer);
     loadProjects();
+  }
+  } catch (e) {
+    console.error(e);
+    walletMsg(e && e.message === "timeout"
+      ? "Wallet did not respond. Check for a hidden popup, unlock your wallet, or disable other wallet extensions and retry."
+      : "Could not connect to wallet. Check your wallet extension and retry.");
   }
 }
 
