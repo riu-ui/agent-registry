@@ -625,7 +625,11 @@ async function copyWcUri() {
 async function connectWalletConnect() {
   walletMsg("");
   if (!WALLETCONNECT_PROJECT_ID) {
-    walletMsg("WalletConnect is not configured yet — a Reown Project ID is needed. Use a browser wallet for now.");
+    $("wcQr").innerHTML = "";
+    $("wcUri").style.display = "none";
+    $("wcCopy").style.display = "none";
+    $("wcStatus").textContent = "WalletConnect is not configured yet — a Reown Project ID is needed. Create a free project at cloud.reown.com, then send the Project ID here and the QR will work.";
+    $("wcOverlay").style.display = "flex";
     return;
   }
   if (!wcAvailable()) {
