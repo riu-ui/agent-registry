@@ -407,6 +407,7 @@ const __$G=typeof globalThis!=="undefined"?globalThis:typeof window!=="undefined
       <p id="wcStatus" class="meta" style="text-align:center"></p>
       <div class="row" style="justify-content:center;margin-top:12px">
         <button id="wcCopy" class="ghostbtn" style="display:none">Copy connection link</button>
+        <button id="wcOpenApp" class="ghostbtn" style="display:none">Open in Binance App</button>
         <button id="wcCancel" class="ghostbtn">Cancel</button>
       </div>
     </div>
@@ -555,11 +556,61 @@ function openChooser() {
 }
 function closeChooser() { $("chooserOverlay").style.display = "none"; }
 
+function findBinanceProvider() {
+  if (window.binancew3w && window.binancew3w.ethereum) return window.binancew3w.ethereum;
+  let found = null;
+  discoveredWallets.forEach(({ info, provider }) => {
+    const rdns = String(info.rdns || "").toLowerCase();
+    const name = String(info.name || "").toLowerCase();
+    if (rdns === "com.binance.wallet" || rdns === "wallet.binance.com" || name.indexOf("binance") !== -1) found = provider;
+  });
+  if (found) return found;
+  const eth = window.ethereum;
+  if (eth) {
+    if (eth.isBinance) return eth;
+    if (Array.isArray(eth.providers)) {
+      const p = eth.providers.find(x => x && x.isBinance);
+      if (p) return p;
+    }
+  }
+  return null;
+}
+
+// Binance deep link (format from @binance/w3w-utils getDeeplink): hands a
+// WalletConnect URI to the Binance App so it can approve the session there.
+function b64url(s) {
+  return btoa(unescape(encodeURIComponent(s))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function binanceDeeplink(wcUri) {
+  let a = "appId=xoqXxUSMRccLCrZNRebmzj&startPagePath=L3BhZ2VzL2Rhc2hib2FyZC1uZXcvaW5kZXg=";
+  if (wcUri) {
+    const c = b64url("wc=" + encodeURIComponent(wcUri) + "&isDeepLink=true&id=" + Date.now());
+    a += "&startPageQuery=" + c;
+  }
+  return "bnc://app.binance.com/mp/app?" + a;
+}
+function isMobileUA() {
+  return /Android|BlackBerry|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent || "");
+}
+
 function renderChooser() {
   const list = $("chooserList");
   list.innerHTML = "";
   const seen = new Set();
+  const binance = findBinanceProvider();
+  if (binance) seen.add(binance);
+  const bRow = document.createElement("button");
+  bRow.className = "wrow";
+  if (binance) {
+    bRow.innerHTML = `<span>Binance Wallet<span class="wsub">Agent ID lives here — connect to submit and signal</span></span><span class="wtag">Detected</span>`;
+    bRow.onclick = () => { closeChooser(); connectWithProvider(binance); };
+  } else {
+    bRow.innerHTML = `<span>Binance Wallet<span class="wsub">Not detected — get the extension or the Binance App</span></span><span class="wtag">Get it</span>`;
+    bRow.onclick = () => { window.open("https://www.binance.com/en/web3wallet", "_blank"); };
+  }
+  list.appendChild(bRow);
   discoveredWallets.forEach(({ info, provider }) => {
+    if (seen.has(provider)) return; // already shown as the Binance row
     seen.add(provider);
     const icon = info.icon ? String(info.icon).replace(/"/g, "") : "";
     const b = document.createElement("button");
@@ -579,7 +630,7 @@ function renderChooser() {
   if (wcAvailable()) {
     const b = document.createElement("button");
     b.className = "wrow";
-    b.innerHTML = `<span>WalletConnect<span class="wsub">Scan a QR code with your mobile wallet</span></span><span class="wtag">QR</span>`;
+    b.innerHTML = `<span>WalletConnect<span class="wsub">Scan with your mobile wallet — Binance App, Trust Wallet, MetaMask…</span></span><span class="wtag">QR</span>`;
     b.onclick = () => { closeChooser(); connectWalletConnect(); };
     list.appendChild(b);
   }
@@ -603,6 +654,7 @@ function renderWcQr(uri) {
   $("wcUri").textContent = uri;
   $("wcUri").style.display = "block";
   $("wcCopy").style.display = "inline-block";
+  if (isMobileUA()) $("wcOpenApp").style.display = "inline-block";
 }
 function closeWc() { $("wcOverlay").style.display = "none"; }
 function cancelWc() {
@@ -640,6 +692,7 @@ async function connectWalletConnect() {
   $("wcQr").innerHTML = "";
   $("wcUri").style.display = "none";
   $("wcCopy").style.display = "none";
+  $("wcOpenApp").style.display = "none";
   $("wcStatus").textContent = "Creating a connection request…";
   $("wcOverlay").style.display = "flex";
   if (wcUriTimer) clearTimeout(wcUriTimer);
@@ -1476,6 +1529,7 @@ $("chooserOverlay").addEventListener("click", e => { if (e.target === $("chooser
 $("wcClose").onclick = cancelWc;
 $("wcCancel").onclick = cancelWc;
 $("wcCopy").onclick = copyWcUri;
+$("wcOpenApp").onclick = () => { if (wcUri) window.location.href = binanceDeeplink(wcUri); };
 $("wcOverlay").addEventListener("click", e => { if (e.target === $("wcOverlay")) cancelWc(); });
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
