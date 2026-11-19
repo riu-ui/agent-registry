@@ -681,6 +681,40 @@ async function copyWcUri() {
   }
 }
 
+let wcHandlersAttached = false;
+async function ensureWcProvider() {
+  if (!wcProvider) {
+    const EP = window["@walletconnect/ethereum-provider"].EthereumProvider;
+    wcProvider = await EP.init({
+      projectId: WALLETCONNECT_PROJECT_ID,
+      chains: [56],
+      showQrModal: false,
+      metadata: WC_METADATA
+    });
+  }
+  if (!wcHandlersAttached) {
+    wcHandlersAttached = true;
+    wcProvider.on("display_uri", (uri) => { if (!wcCancelled) renderWcQr(uri); });
+    wcProvider.on("disconnect", () => { if (connectedViaWC) disconnect(true); });
+  }
+  return wcProvider;
+}
+
+// A WalletConnect session approved on the phone survives a page reload
+// (the session lives in storage), but the in-memory provider does not.
+// On load, restore it so the page comes back Connected instead of
+// silently forgetting the approval.
+async function restoreWcSession() {
+  if (!WALLETCONNECT_PROJECT_ID || !wcAvailable() || account) return;
+  try {
+    await ensureWcProvider();
+    if (wcProvider.session) {
+      connectedViaWC = true;
+      await connectWithProvider(wcProvider);
+    }
+  } catch (e) { /* no session to restore; stay disconnected */ }
+}
+
 async function connectWalletConnect() {
   walletMsg("");
   if (!WALLETCONNECT_PROJECT_ID) {
@@ -709,19 +743,12 @@ async function connectWalletConnect() {
     }
   }, 20000);
   try {
-    if (!wcProvider) {
-      const EP = window["@walletconnect/ethereum-provider"].EthereumProvider;
-      wcProvider = await EP.init({
-        projectId: WALLETCONNECT_PROJECT_ID,
-        chains: [56],
-        showQrModal: false,
-        metadata: WC_METADATA
-      });
-      wcProvider.on("display_uri", (uri) => { if (!wcCancelled) renderWcQr(uri); });
-      wcProvider.on("disconnect", () => { if (connectedViaWC) disconnect(true); });
-    }
+    await ensureWcProvider();
     wcConnecting = true;
-    await wcProvider.connect();
+    await Promise.race([
+      wcProvider.connect(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 90000))
+    ]);
     wcConnecting = false;
     if (wcUriTimer) { clearTimeout(wcUriTimer); wcUriTimer = null; }
     if (wcCancelled) return;
@@ -733,7 +760,9 @@ async function connectWalletConnect() {
     if (wcUriTimer) { clearTimeout(wcUriTimer); wcUriTimer = null; }
     console.error(e);
     if (wcCancelled) return;
-    $("wcStatus").textContent = "Could not start WalletConnect. Check your connection and try again.";
+    $("wcStatus").textContent = (e && e.message === "timeout")
+      ? "Connection request timed out. If you approved in your wallet, reload the page — the session may already be saved."
+      : "Could not start WalletConnect. Check your connection and try again.";
   }
 }
 
@@ -1560,6 +1589,7 @@ document.addEventListener("keydown", e => {
 $("submitBtn").onclick = submit;
 if (contractReady()) {
   initReadOnly();
+  restoreWcSession();
 } else {
   $("deployNotice").style.display = "block";
   renderSamples();
