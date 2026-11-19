@@ -813,10 +813,21 @@ async function connectWithProvider(injected) {
       injected.request({ method: "eth_requestAccounts" }),
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))
     ]);
-    const net = await provider.getNetwork();
+    const net = await Promise.race([
+      provider.getNetwork(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))
+    ]);
     if (net.chainId !== 56n) {
+      // No timeout here used to hang forever on mobile: the switch prompt
+      // lives in the wallet app, and if the user never sees it the page
+      // sat on "Waiting for wallet approval…" with the button still
+      // saying Connect Wallet.
+      walletMsg("Switching to BNB Smart Chain — approve it in your wallet app…");
       try {
-        await injected.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+        await Promise.race([
+          injected.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))
+        ]);
         provider = new ethers.BrowserProvider(injected);
       } catch (e) {
         walletMsg("Please switch to BNB Smart Chain (chain 56) — check your wallet popup to approve the switch.");
