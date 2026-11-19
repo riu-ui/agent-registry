@@ -554,6 +554,9 @@ function openChooser() {
   renderChooser();
   $("chooserOverlay").style.display = "flex";
   setTimeout(() => { if ($("chooserOverlay").style.display !== "none") renderChooser(); }, 400);
+  // Slow extensions can announce late; re-render once more so a wallet
+  // that shows up after the first pass is not missed.
+  setTimeout(() => { if ($("chooserOverlay").style.display !== "none") { requestWalletAnnouncements(); renderChooser(); } }, 1500);
 }
 function closeChooser() { $("chooserOverlay").style.display = "none"; }
 
@@ -743,7 +746,7 @@ function walletMsg(text) {
   el.style.display = text ? "block" : "none";
 }
 
-let walletListenersAttached = false;
+let listenersProvider = null;
 let userDisconnected = false;
 function setConnectedUI(on) {
   const btn = $("connectBtn");
@@ -753,9 +756,12 @@ function setConnectedUI(on) {
   if (!on) $("account").textContent = "";
 }
 function attachWalletListeners(injected) {
-  if (walletListenersAttached || !injected || typeof injected.on !== "function") return;
-  walletListenersAttached = true;
+  // Per-provider, not a global flag: after connecting OKX once, a later
+  // MetaMask connect must still get its own listeners.
+  if (!injected || typeof injected.on !== "function" || listenersProvider === injected) return;
+  listenersProvider = injected;
   injected.on("accountsChanged", (accs) => {
+    if (injected !== currentProvider) return;
     if (!accs || !accs.length) {
       account = null; signer = null; isHolder = false;
       setConnectedUI(false);
@@ -766,7 +772,7 @@ function attachWalletListeners(injected) {
       connectWithProvider(currentProvider);
     }
   });
-  injected.on("chainChanged", () => location.reload());
+  injected.on("chainChanged", () => { if (injected === currentProvider) location.reload(); });
 }
 
 function disconnect(silent) {
@@ -813,7 +819,7 @@ async function connectWithProvider(injected) {
         await injected.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
         provider = new ethers.BrowserProvider(injected);
       } catch (e) {
-        walletMsg("Please switch to BNB Smart Chain (chain 56) in your wallet.");
+        walletMsg("Please switch to BNB Smart Chain (chain 56) — check your wallet popup to approve the switch.");
         return;
       }
     }
