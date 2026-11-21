@@ -581,10 +581,19 @@ function buildSubmitPrompt() {
   const description = $("pdesc").value.trim();
   const website = $("pwebsite").value.trim();
   const xHandle = $("px").value.trim();
+  $("pname").style.borderColor = "";
+  $("pcontract").style.borderColor = "";
   if (!name || !ethers.isAddress(addr)) {
-    $("submitMsg").textContent = "Need a name and a valid BSC contract address.";
+    const msg = $("submitMsg");
+    msg.textContent = "Need a name and a valid BSC contract address — fill those two fields first, then tap the button again.";
+    msg.style.color = "#f85149";
+    msg.style.fontWeight = "700";
+    if (!name) { $("pname").style.borderColor = "#f85149"; $("pname").focus(); }
+    else { $("pcontract").style.borderColor = "#f85149"; $("pcontract").focus(); }
     return;
   }
+  $("submitMsg").style.color = "";
+  $("submitMsg").style.fontWeight = "";
   $("submitMsg").textContent = "";
   const text = "Submit a project to the Agent Registry on BNB Smart Chain (chain 56).\n\n"
     + "Registry contract: " + REGISTRY_ADDRESS + "\n"
