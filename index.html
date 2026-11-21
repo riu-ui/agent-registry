@@ -248,7 +248,7 @@ const __$G=typeof globalThis!=="undefined"?globalThis:typeof window!=="undefined
       </label>
     </div>
     <label>Your Agent ID
-      <input id="agentIdInput" type="text" maxlength="40" placeholder="e.g. saylor90.ai">
+      <input id="agentIdInput" type="text" maxlength="40" placeholder="e.g. yourname.ai">
     </label>
     <div class="row" style="margin-bottom:12px">
       <button id="checkIdBtn" class="ghostbtn">Check my Agent ID</button>
@@ -518,7 +518,7 @@ async function checkAgentId() {
   const label = normalizeAgentId($("agentIdInput").value);
   const st = $("agentIdStatus");
   if (!label) {
-    st.textContent = "Enter your Agent ID, e.g. saylor90.ai";
+    st.textContent = "Enter your Agent ID, e.g. yourname.ai";
     checkedAgentId = null;
     return;
   }
